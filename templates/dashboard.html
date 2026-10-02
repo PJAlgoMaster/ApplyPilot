@@ -1,0 +1,437 @@
+{% extends "base.html" %}
+{% block title %}dashboard · ApplyPilot{% endblock %}
+{% block crumb %}~/pipeline <span class="text-zinc-700">/</span> <span class="text-zinc-300">jobs</span> <span class="ml-1 rounded border border-zinc-800 bg-white/[0.03] px-1.5 py-0.5 tnum text-zinc-500">{{ jobs | length }}</span>{% endblock %}
+
+{% block topbar %}
+  <span class="inline-flex items-center gap-1.5 rounded-md border border-zinc-800 bg-white/[0.03] px-2.5 py-1 font-mono text-[10px] text-zinc-400">
+    <span class="h-1.5 w-1.5 rounded-full {{ 'animate-pulse bg-emerald-400' if quota_left else 'bg-red-500' }}"></span>
+    quota <span class="tnum text-zinc-200">{{ quota_left }}</span><span class="text-zinc-600">/{{ cfg.MAX_DAILY_APPLICATIONS }}</span>
+  </span>
+  <a href="/" class="rounded-md border border-zinc-800 px-2.5 py-1 font-mono text-[10px] text-zinc-400 transition hover:border-zinc-700 hover:text-zinc-200">reload</a>
+{% endblock %}
+
+{% macro spinner(text) %}
+<span class="htmx-indicator items-center gap-1.5">
+  <svg class="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" stroke-opacity=".2"/>
+    <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+  </svg>{{ text }}
+</span>
+{% endmacro %}
+
+{% block content %}
+{% set pct_used = ((applied_today / cfg.MAX_DAILY_APPLICATIONS) * 100) | round(0) %}
+{#- Whatever this page is filtered by rides along on every control - the buttons post to the same filter
+    they were clicked from, so a run or a fragment swap can neither widen nor lose the operator's view.
+    One at a time: the day strip, a status, a scrape date and a role family are four ways to ask the
+    same question. -#}
+{% set qs = ('?status=' ~ status_filter) if status_filter else (('?view=' ~ view_filter) if view_filter
+             else (('?scraped=' ~ scraped_filter) if scraped_filter else (('?role=' ~ role_filter) if role_filter else ''))) %}
+<section class="mb-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
+
+  <div class="card flex flex-col justify-between gap-4 p-5">
+    <div>
+      <p class="label">pipeline</p>
+      <h2 class="mt-1.5 text-[19px] font-semibold leading-tight text-zinc-100">Application queue</h2>
+      <p class="mt-1.5 max-w-xl text-[12px] leading-relaxed text-zinc-500">
+        Scrape the boards, tailor a resume per role, submit, then reach a human. Sends resume at midnight;
+        nothing leaves this machine without a click.
+      </p>
+    </div>
+    <div class="flex flex-wrap items-center gap-2">
+      {% for label, value, tone in [('queued for a run', by_status.get('queued', 0), 'zinc'),
+                                    ('eligible now', eligible_count, 'zinc'),
+                                    ('emailed', funnel.emailed, 'emerald'),
+                                    ('replied', funnel.replied, 'sky')] %}
+      <span class="inline-flex items-baseline gap-1.5 rounded-md border border-zinc-800 bg-white/[0.02] px-2.5 py-1 font-mono text-[10px] text-zinc-500">
+        <span class="tnum text-[12px] {{ 'text-emerald-400' if tone == 'emerald' else ('text-sky-300' if tone == 'sky' else 'text-zinc-200') }}">{{ value }}</span>
+        {{ label }}
+      </span>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="card flex items-center gap-5 p-5">
+    {% set circ = 175.9 %}
+    {% set frac = (quota_left / cfg.MAX_DAILY_APPLICATIONS) if cfg.MAX_DAILY_APPLICATIONS else 0 %}
+    <div class="relative h-[74px] w-[74px] shrink-0">
+      <svg class="h-full w-full -rotate-90" viewBox="0 0 64 64" aria-hidden="true">
+        <circle cx="32" cy="32" r="28" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="5"/>
+        <circle cx="32" cy="32" r="28" fill="none" stroke="#10b981" stroke-width="5" stroke-linecap="round"
+                stroke-dasharray="{{ (frac * circ) | round(1) }} {{ circ }}"/>
+      </svg>
+      <div class="absolute inset-0 grid place-items-center">
+        <span class="tnum font-mono text-[17px] leading-none text-zinc-100">{{ quota_left }}</span>
+      </div>
+    </div>
+    <div class="min-w-[9rem]">
+      <p class="label">daily quota</p>
+      <p class="mt-1.5 font-mono text-[11px] text-zinc-400">
+        <span class="tnum text-zinc-200">{{ applied_today }}</span> applied of {{ cfg.MAX_DAILY_APPLICATIONS }}
+      </p>
+      <div class="bar-track mt-2 h-1 w-full overflow-hidden rounded-full">
+        <div class="bar-fill h-full rounded-full" style="width: {{ pct_used if pct_used <= 100 else 100 }}%"></div>
+      </div>
+      <p class="mt-2 font-mono text-[10px] text-zinc-600">resets at midnight · target {{ cfg.MIN_DAILY_APPLICATIONS }}–{{ cfg.MAX_DAILY_APPLICATIONS }}</p>
+    </div>
+  </div>
+</section>
+
+<section class="mb-4 grid gap-3 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
+
+  <div class="card p-5">
+    <div class="mb-4 flex items-baseline gap-3">
+      <p class="label">funnel</p>
+      <span class="rule h-px flex-1"></span>
+      <a href="/analytics" class="font-mono text-[10px] text-zinc-600 transition hover:text-emerald-300">full breakdown →</a>
+    </div>
+    {% set stages = [('queued', funnel.queued), ('applied', funnel.applied), ('emailed', funnel.emailed),
+                     ('replied', funnel.replied), ('followed', funnel.followed)] %}
+    {% set peak = [funnel.queued, funnel.applied, funnel.emailed, funnel.replied, funnel.followed] | max %}
+    <div class="flex h-28 items-end gap-2">
+      {% for name, value in stages %}
+      {% set h = (value / peak * 100) if peak else 0 %}
+      <div class="group flex h-full min-w-0 flex-1 flex-col justify-end gap-2" title="{{ name }}: {{ value }}">
+        <span class="tnum text-center font-mono text-[11px] {{ 'text-emerald-400' if value and name in ('replied', 'followed', 'emailed') else 'text-zinc-400' }}">{{ value }}</span>
+        {% if value %}
+        <div class="col-fill w-full rounded-t" style="height: {{ h if h > 6 else 6 }}%"></div>
+        {% else %}
+        <div class="h-0.5 w-full rounded-full bg-zinc-800"></div>
+        {% endif %}
+        <span class="truncate text-center font-mono text-[9px] uppercase tracking-[0.14em] text-zinc-600">{{ name }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    <p class="mt-3 border-t border-zinc-800/70 pt-3 font-mono text-[10px] text-zinc-600">
+      reply rate <span class="tnum text-zinc-300">{{ ((funnel.replied / funnel.emailed * 100) | round(0)) if funnel.emailed else 0 }}%</span>
+      · nudged <span class="tnum text-zinc-300">{{ funnel.followed }}</span> of {{ funnel.emailed }} touched
+    </p>
+  </div>
+
+  <div class="card p-5">
+    <p class="label mb-4">actions</p>
+    {#- Every state-changing control carries .run-btn, but nothing here is ever disabled while work is in
+        flight: the server queues what it cannot run yet and attaches to what it is already running, so a
+        second click is never refused. The old lock was client-side theatre - a second tab or a stale page
+        bypassed it - and the only thing that ever really stopped two runs of one job is the server-side
+        key in main._start. `disabled` below means a real fact (no quota left, empty queue), never "busy".
+        $clear-database returns 204: htmx skips the swap on 204 by spec and HX-Refresh reloads the page,
+        so hx-target only serves the failure path, where the route returns the fragment. -#}
+    <div class="space-y-2">
+
+      {#- data-run, not hx-post: the batch route answers with a chunked stream of hx-swap-oob records so the
+          queue updates one row at a time. htmx would buffer that whole body and swap once at the end, which
+          is exactly the blind wait this replaces - so the reader in base.html drives it instead.
+          The button belongs to a SCRAPE DAY, never to 'all' - a run over every row in the table is a week
+          of hauls at once with no day to say which one was meant. main._run_all_visible decides: today's
+          tab always, an older day only while it still owes enough untouched rows to be worth a batch, and
+          the scoped queues (a status, a role family, the owed tab, follow-ups) keep it because they are
+          not 'all'. Each day tab carries its own, scoped by ?view=, so pressing it in one day runs that
+          day's haul and leaves the rest alone. Where it is hidden, the line says where to find it. -#}
+      {% if run_all %}
+      <button data-run="/pipeline/run-all{{ qs }}"
+        data-confirm="Run the full pipeline for every eligible job{% if view_filter == 'notapplied' %} on this tab still owed work - the missing application, the missing mail, or both{% elif view_filter %} in the {{ view_label }} tab{% elif scraped_filter %} scraped on {{ scraped_filter }}{% elif role_filter %} in the {{ role_filter }} family{% endif %} (up to {{ quota_left }} today)? This submits real applications and sends cold emails."
+        class="run-btn flex w-full items-center gap-3 rounded-md border border-emerald-500/40 bg-emerald-400/[0.06] px-3 py-2.5 text-left transition hover:border-emerald-500/70 hover:bg-emerald-400/[0.12] disabled:cursor-not-allowed disabled:opacity-40"
+        {{ 'disabled' if not quota_left }}>
+        <span class="grid h-7 w-7 shrink-0 place-items-center rounded border border-emerald-500/30 bg-emerald-400/10 font-mono text-[11px] text-emerald-300">$</span>
+        <span class="min-w-0">
+          <span class="idle-label block font-mono text-[11px] text-emerald-200">run-all-queued{% if view_label %} <span class="text-emerald-400/70">· {{ view_label }}</span>{% elif scraped_filter %} <span class="text-emerald-400/70">· {{ scraped_filter }}</span>{% endif %}</span>
+          {{ spinner('<span class="block font-mono text-[11px] text-emerald-200">batch running…</span>') }}
+          <span class="block font-mono text-[10px] text-zinc-500">{{ 'that scrape day only' if scraped_filter else (view_label ~ ' only' if view_label else 'the rows on this page') }} · best-fit first · one at a time · up to {{ quota_left }} today</span>
+        </span>
+      </button>
+      {% else %}
+      <p class="rounded-md border border-zinc-800 px-3 py-2.5 font-mono text-[10px] leading-relaxed text-zinc-600">
+        run-all belongs to a scrape day — open recent or a day tab and it is there, scoped to that haul.
+        {%- if scraped_filter %} A day picked from the All tab's filter offers it once it still holds
+        {{ cfg.RUN_ALL_MIN_UNTOUCHED }}+ untouched rows.{% endif %}
+      </p>
+      {% endif %}
+
+      <div class="grid grid-cols-2 gap-2">
+        <button data-run="/scrape{{ qs }}"
+          class="run-btn flex items-start gap-2.5 rounded-md border border-zinc-800 bg-white/[0.02] px-3 py-2.5 text-left transition hover:border-zinc-700 disabled:opacity-40">
+          <span class="mt-0.5 font-mono text-[11px] text-zinc-600">$</span>
+          <span class="min-w-0">
+            <span class="idle-label block font-mono text-[11px] text-zinc-300">scrape-jobs</span>
+            {{ spinner('<span class="block font-mono text-[11px] text-zinc-300">4 boards…</span>') }}
+            <span class="block font-mono text-[10px] text-zinc-600">refresh the queue</span>
+          </span>
+        </button>
+
+        <button data-run="/replies/poll{{ qs }}"
+          class="run-btn flex items-start gap-2.5 rounded-md border border-sky-500/30 bg-sky-400/[0.05] px-3 py-2.5 text-left transition hover:border-sky-500/60 hover:bg-sky-400/[0.1] disabled:opacity-40">
+          <span class="mt-0.5 font-mono text-[11px] text-sky-500">$</span>
+          <span class="min-w-0">
+            <span class="idle-label block font-mono text-[11px] text-sky-200">check-replies</span>
+            {{ spinner('<span class="block font-mono text-[11px] text-sky-200">reading inbox + sent mail…</span>') }}
+            <span class="block font-mono text-[10px] text-zinc-600">stamp replies · verify sends · drop .ics</span>
+          </span>
+        </button>
+
+        <button data-run="/followups/run{{ qs }}"
+          data-confirm="Send a follow-up nudge to every outreach older than {{ cfg.FOLLOWUP_DAYS }} days that never got a reply? One nudge per recruiter, ever — it sends nothing in dry-run mode."
+          class="run-btn flex items-start gap-2.5 rounded-md border border-amber-500/30 bg-amber-400/[0.05] px-3 py-2.5 text-left transition hover:border-amber-500/60 hover:bg-amber-400/[0.1] disabled:opacity-40">
+          <span class="mt-0.5 font-mono text-[11px] text-amber-500">$</span>
+          <span class="min-w-0">
+            <span class="idle-label block font-mono text-[11px] text-amber-200">run-follow-ups</span>
+            {{ spinner('<span class="block font-mono text-[11px] text-amber-200">nudging…</span>') }}
+            <span class="block font-mono text-[10px] text-zinc-600">silent {{ cfg.FOLLOWUP_DAYS }}d · one nudge per row, ever</span>
+          </span>
+        </button>
+
+        <button hx-delete="/jobs/clear" hx-target="#rows" hx-swap="innerHTML" hx-indicator="this"
+          hx-confirm="Clear the whole queue — every row that never left this machine? Rows already applied to or emailed are NOT deleted (they are the applied / emailed / follow-ups tabs) and keep spending today's quota. The HR-mailbox vault and the company cooldown ledger survive, and generated PDFs stay on disk."
+          class="run-btn flex items-start gap-2.5 rounded-md border border-red-500/30 bg-red-500/[0.05] px-3 py-2.5 text-left transition hover:border-red-500/60 hover:bg-red-500/[0.1] disabled:cursor-not-allowed disabled:opacity-40"
+          {{ 'disabled' if not jobs }}>
+          <span class="mt-0.5 font-mono text-[11px] text-red-500">$</span>
+          <span class="min-w-0">
+            <span class="idle-label block font-mono text-[11px] text-red-200">clear-database</span>
+            {{ spinner('<span class="block font-mono text-[11px] text-red-200">wiping…</span>') }}
+            <span class="block font-mono text-[10px] text-zinc-600">sent rows survive · ledgers survive</span>
+          </span>
+        </button>
+      </div>
+    </div>
+  </div>
+</section>
+
+{#- The daily project. One button, and the ledger of what it produced - because the question this
+    answers is not "did it run" but "what went up, and where is it". The press is whatever today owes
+    the project in flight: the announcement on day one, one phase a day after that, and the wrap-up
+    when the last phase is in. Every phase is run before it is committed or posted, so a day that did
+    not work lands here as failed with the real error instead of as a post. It is once a day by
+    construction: (day, kind) is the primary key of the ledger, so a second press finds today's row and
+    says so instead of opening a second repository. The button disappears for the rest of the day once
+    the post is up, and comes back on its own if the day's attempt failed, so a retry is one click. -#}
+{% set tone = {'posted': 'emerald', 'built': 'amber', 'failed': 'red', 'dry-run': 'zinc', 'dry_run': 'zinc'} %}
+<section class="card mb-4 overflow-hidden">
+  <div class="flex flex-wrap items-center gap-3 border-b border-zinc-800/80 px-4 py-3">
+    <span class="label">daily project</span>
+    <span class="rule h-px flex-1"></span>
+    <span class="font-mono text-[10px] text-zinc-600">
+      github profile refresh
+      <span class="{{ 'text-emerald-300' if not refresh_in else 'text-zinc-400' }}">
+        {{ 'due today' if not refresh_in else 'in ' ~ refresh_in ~ ' day(s)' }}
+      </span>
+    </span>
+  </div>
+
+  <div class="space-y-2 p-3">
+    {% if github_problem %}
+    <p class="rounded-md border border-amber-500/30 bg-amber-400/[0.05] px-3 py-2 font-mono text-[10px] leading-relaxed text-amber-200/90">
+      github is not wired up yet · {{ github_problem }}
+    </p>
+    {% endif %}
+
+    {% if project %}
+    {#- What is being built, and how far along it is. The phase list is the project's own account of
+        itself: ticked means it shipped and ran, the arrow is today, a dot is still to come. -#}
+    <div class="rounded-md border border-zinc-800 bg-white/[0.015] px-3 py-2.5">
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span class="font-mono text-[11px] text-zinc-200">{{ project.title }}</span>
+        <span class="rounded border border-zinc-800 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.14em] text-zinc-500">
+          {{ project.done }}/{{ project_phases|length }} phases
+        </span>
+        <span class="min-w-0 flex-1"></span>
+        {% if project.repo_url %}
+        <a href="{{ project.repo_url }}" target="_blank" rel="noopener"
+           class="font-mono text-[10px] text-sky-300 transition hover:text-sky-200">{{ project.repo_url.replace('https://', '') }} ↗</a>
+        {% endif %}
+      </div>
+      <p class="mt-1 font-mono text-[10px] leading-relaxed text-zinc-500">{{ project.pitch }}</p>
+      <div class="mt-2 space-y-0.5">
+        {% for phase in project_phases %}
+        <p class="font-mono text-[10px] {{ 'text-emerald-300/80' if loop.index0 < project.done else ('text-sky-300' if loop.index0 == project.done else 'text-zinc-600') }}">
+          {{ '✓' if loop.index0 < project.done else ('▸' if loop.index0 == project.done else '·') }}
+          {{ loop.index }}. {{ phase.name }}
+        </p>
+        {% endfor %}
+      </div>
+      {% if project.output %}
+      <p class="mt-2 truncate font-mono text-[10px] text-zinc-600" title="{{ project.output }}">last run: {{ project.output.splitlines()[0] if project.output.splitlines() else '' }}</p>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {% if posted_today %}
+    <div class="flex flex-wrap items-center gap-3 rounded-md border border-emerald-500/30 bg-emerald-400/[0.05] px-3 py-2.5">
+      {% if posted_today.image_path %}
+      <img src="/social/{{ posted_today.image_path }}" alt="today's card"
+        class="h-14 w-14 shrink-0 rounded border border-zinc-800 object-cover">
+      {% endif %}
+      <div class="min-w-0">
+        <p class="font-mono text-[11px] text-emerald-200">posted today · {{ posted_today.title }}</p>
+        <p class="mt-1 flex flex-wrap items-center gap-3 font-mono text-[10px] text-zinc-500">
+          {% if posted_today.repo_url %}
+          <a href="{{ posted_today.repo_url }}" target="_blank" rel="noopener"
+             class="text-sky-300 transition hover:text-sky-200">{{ posted_today.repo_url.replace('https://', '') }} ↗</a>
+          {% endif %}
+          {% if posted_today.image_path %}
+          <a href="/social/{{ posted_today.image_path }}" target="_blank" rel="noopener"
+             class="transition hover:text-zinc-300">card ↗</a>
+          {% endif %}
+          <span>{{ posted_today.summary }}</span>
+          <span class="text-zinc-600">tomorrow's build unlocks at midnight</span>
+        </p>
+      </div>
+    </div>
+    {% else %}
+    <button data-run="/social/post"
+      data-confirm="Do today's step of the project — {% if project %}{{ today_step }}{% else %}announce a new project{% endif %} — commit it to your GitHub, then publish the post about it on your LinkedIn? The browser opens visibly and the post is typed into your own profile — it goes out to your network and cannot be undone.{% if posts and posts[0].status == 'failed' %} Today's earlier attempt failed, so this is a retry.{% endif %}"
+      class="run-btn flex w-full items-center gap-3 rounded-md border border-sky-500/40 bg-sky-400/[0.06] px-3 py-2.5 text-left transition hover:border-sky-500/70 hover:bg-sky-400/[0.12] disabled:cursor-not-allowed disabled:opacity-40">
+      <span class="grid h-7 w-7 shrink-0 place-items-center rounded border border-sky-500/30 bg-sky-400/10 font-mono text-[11px] text-sky-300">$</span>
+      <span class="min-w-0">
+        <span class="idle-label block font-mono text-[11px] text-sky-200">daily-post</span>
+        {{ spinner('<span class="block font-mono text-[11px] text-sky-200">building…</span>') }}
+        <span class="block font-mono text-[10px] text-zinc-500">today: {{ today_step }}</span>
+      </span>
+    </button>
+    {% endif %}
+
+    {% if posts %}
+    <div class="rounded-md border border-zinc-800">
+      {% for post in posts[:8] %}
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-1 border-zinc-800/70 px-3 py-2 {{ 'border-t' if not loop.first }}">
+        <span class="tnum font-mono text-[10px] text-zinc-500">{{ post.day }}</span>
+        <span class="rounded border border-zinc-800 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.14em] text-zinc-500">{{ post.kind }}</span>
+        <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-zinc-300" title="{{ post.title }}">{{ post.title or '—' }}</span>
+        {% if post.repo_url %}
+        <a href="{{ post.repo_url }}" target="_blank" rel="noopener"
+           class="font-mono text-[10px] text-sky-300 transition hover:text-sky-200">repo ↗</a>
+        {% endif %}
+        {% if post.image_path %}
+        <a href="/social/{{ post.image_path }}" target="_blank" rel="noopener"
+           class="font-mono text-[10px] text-zinc-500 transition hover:text-zinc-300">card ↗</a>
+        {% endif %}
+        <span class="font-mono text-[10px] text-{{ tone.get(post.status, 'zinc') }}-400">{{ post.status }}</span>
+      </div>
+      {% if post.error %}
+      <p class="px-3 pb-2 font-mono text-[10px] leading-relaxed text-red-400/80">{{ post.error }}</p>
+      {% endif %}
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="rounded-md border border-zinc-800 px-3 py-2.5 font-mono text-[10px] leading-relaxed text-zinc-600">
+      nothing built yet. the first press picks a project worth a hiring manager's two minutes, opens a
+      repository for it and posts the plan — then one phase a day, each one run before it is posted,
+      until the wrap-up with the screenshots. it all lands here with the links.
+    </p>
+    {% endif %}
+
+    {#- The LinkedIn half of the 15-day refresh. The GitHub profile README is pushed automatically; a
+        headlined profile edit is not, because that is the one action on LinkedIn that gets an account
+        restricted and it is two sentences to paste. -#}
+    {% set profile = posts | selectattr('kind', 'equalto', 'profile') | selectattr('status', 'equalto', 'posted') | list | first %}
+    {% set built = projects | selectattr('done') | selectattr('repo_url') | list %}
+    {% if profile or built %}
+    <details class="rounded-md border border-zinc-800 px-3 py-2">
+      <summary class="cursor-pointer font-mono text-[10px] text-zinc-500 transition hover:text-zinc-300">
+        linkedin profile draft · headline + about, refreshed with the 15-day clock
+      </summary>
+      {% if profile %}
+      <p class="mt-3 font-mono text-[11px] leading-relaxed text-zinc-300">{{ profile.title }}</p>
+      <p class="mt-2 whitespace-pre-line font-mono text-[10px] leading-relaxed text-zinc-500">{{ profile.body }}</p>
+      <button type="button"
+        data-text="{{ profile.title }}&#10;&#10;{{ profile.body }}"
+        onclick="navigator.clipboard.writeText(this.dataset.text).then(() => { this.textContent = 'copied'; })"
+        class="mt-3 rounded-md border border-zinc-700 px-2 py-1 font-mono text-[10px] text-zinc-400 transition hover:border-emerald-500/50 hover:text-emerald-300">
+        copy both
+      </button>
+      {% endif %}
+      {#- The projects section. The wrap-up adds the entry itself; this is the same entry in the three
+          fields the form asks for, so a form that moved under the automation is a paste, not a rebuild. -#}
+      {% if built %}
+      <p class="label mt-4">projects section · {{ built | length }} finished</p>
+      {% for p in built %}
+      <div class="mt-2 border-t border-zinc-800/70 pt-2 first:border-0">
+        <p class="font-mono text-[11px] text-zinc-300">{{ p.title }}</p>
+        <p class="mt-1 font-mono text-[10px] leading-relaxed text-zinc-600">{{ p.pitch }}</p>
+        <p class="mt-1 font-mono text-[10px] text-zinc-600">{{ p.tech }} · {{ p.started_day }} → {{ p.finished_day }}</p>
+        <div class="mt-1 flex items-center gap-3">
+          <a href="{{ p.repo_url }}" target="_blank" rel="noopener"
+             class="font-mono text-[10px] text-zinc-500 transition hover:text-emerald-300">{{ p.repo_url }}</a>
+          <button type="button"
+            data-text="{{ p.title }}&#10;&#10;{{ p.pitch }}&#10;&#10;{{ p.tech }}&#10;&#10;{{ p.repo_url }}"
+            onclick="navigator.clipboard.writeText(this.dataset.text).then(() => { this.textContent = 'copied'; })"
+            class="rounded-md border border-zinc-700 px-2 py-0.5 font-mono text-[10px] text-zinc-400 transition hover:border-emerald-500/50 hover:text-emerald-300">
+            copy entry
+          </button>
+        </div>
+      </div>
+      {% endfor %}
+      {% endif %}
+    </details>
+    {% endif %}
+  </div>
+</section>
+
+<section class="card overflow-hidden">
+  <div class="flex flex-wrap items-center gap-3 border-b border-zinc-800/80 px-4 py-3">
+    <span class="label">job queue</span>
+    <span class="hidden shrink-0 font-mono text-[10px] text-zinc-600 sm:inline">{{ jobs | length }} shown</span>
+    <span class="rule hidden h-px flex-1 sm:block"></span>
+    {#- live phase log: every streamed record replaces this span out-of-band -#}
+    <span id="stream-log" class="truncate font-mono text-[10px] text-zinc-600"></span>
+    {#- Tabs. 'all' is every row in the table with no predicate at all (nothing here hides a row); the four
+        role families sit next to it, because a haul is a mix and the split is read off these counts;
+        the day strip is the scrape day - 'recent' is TODAY, then one tab per day of the retention
+        window, so the oldest tab holds exactly the rows the purge takes next; 'followups' is
+        mailed-and-unanswered, i.e. what a nudge is coming for. The rest are statuses. The list itself
+        is built in main._tabs - no list comprehensions in Jinja, and the counts already live in
+        by_status. -#}
+    <div class="flex flex-wrap items-center gap-1 font-mono text-[10px]">
+      {% for label, href, count, hint, on in tabs %}
+      <a href="{{ href }}" title="{{ hint }}"
+         class="rounded-md border px-2 py-0.5 transition {{ 'border-emerald-500/40 bg-emerald-400/10 text-emerald-300' if on else 'border-transparent text-zinc-500 hover:border-zinc-800 hover:text-zinc-300' }}">
+        {{ label }}{% if count %}<span class="tnum ml-1 text-zinc-600">{{ count }}</span>{% endif %}
+      </a>
+      {% endfor %}
+    </div>
+
+    {#- The All tab's date filter: pick the scrape day outright, with the date and how old it is, for the
+        days the six-tab strip cannot reach - a haul older than the retention window still has rows in
+        it whenever one of them left the machine (an application is kept until the reply window shuts).
+        A native select in a GET form, so the calendar is the browser's own control and the URL is
+        shareable; onchange submits because a filter that needs a second click is a filter nobody uses. -#}
+    <form method="get" action="/" class="ml-auto">
+      <select name="scraped" onchange="this.form.submit()" title="show one scrape day, with its age"
+        class="cursor-pointer rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 font-mono text-[10px] text-zinc-400 transition hover:border-zinc-700 hover:text-zinc-200 focus:border-emerald-500/50 focus:outline-none">
+        <option value="" {{ 'selected' if not scraped_filter }}>every scrape day</option>
+        {% for day in scrape_days %}
+        <option value="{{ day.day }}" {{ 'selected' if scraped_filter == day.day }}>
+          {{ day.day }} · {{ 'today' if not day.age else day.age ~ ' day(s) old' }} · {{ day.n }} row(s)
+        </option>
+        {% endfor %}
+      </select>
+    </form>
+  </div>
+
+  {#- Bulk delete. The ids are built from the boxes that are actually ticked, in the browser, and sent as
+      one comma-joined value - so an unticked row can never end up in the DELETE statement, and this
+      control does not depend on how any framework serialises a checkbox. Carries .run-btn: a wipe of
+      named rows must not fire while a browser run is mid-flight. -#}
+  <div class="flex flex-wrap items-center gap-2.5 border-b border-zinc-800/80 bg-white/[0.01] px-4 py-2">
+    <label class="inline-flex cursor-pointer items-center gap-2 font-mono text-[10px] text-zinc-500 transition hover:text-zinc-300">
+      <input type="checkbox" aria-label="select every row on this page"
+        class="h-3.5 w-3.5 cursor-pointer rounded border-zinc-700 bg-transparent accent-emerald-500"
+        onclick="for (const box of document.querySelectorAll('#rows input[name=job]')) box.checked = this.checked">
+      select all
+    </label>
+    <button hx-post="/jobs/delete"
+      hx-vals='js:{"ids": [...document.querySelectorAll("#rows input[name=job]:checked")].map((box) => box.value).join(",")}'
+      hx-target="#rows" hx-swap="innerHTML"
+      hx-confirm="Delete every checked row? A row that already left this machine (applied or mailed) only loses its record — the application or the email itself cannot be undone. Works one by one too: every row has its own delete button."
+      class="run-btn inline-flex items-center gap-1.5 rounded-md border border-zinc-800 px-2 py-1 font-mono text-[10px] text-zinc-500 transition hover:border-red-500/50 hover:bg-red-500/[0.07] hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-40">
+      <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true">
+        <path d="M4 7h16M10 11v6M14 11v6M5 7l1 12a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1l1-12M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+      </svg>
+      delete checked
+    </button>
+    <span class="font-mono text-[10px] text-zinc-700">or the trash button on any single row</span>
+    <span class="ml-auto hidden font-mono text-[10px] text-zinc-700 lg:inline">clear-database removes the rest · sent rows are kept</span>
+  </div>
+
+  <div id="rows" class="space-y-2 p-3">{% include "_rows.html" %}</div>
+</section>
+{% endblock %}

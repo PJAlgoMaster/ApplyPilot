@@ -1,0 +1,78 @@
+{#- Live task panel. Read from the server-side task registry, which is the thing that actually owns the
+    work: the panel is therefore identical on every page, re-rendered out-of-band by every streamed
+    record, and unaffected by which tab is in front. One line per task, because several can be in flight
+    at once - the browser ones queue behind each other and the inbox poll runs beside them - and each
+    line stays up for a while after it finishes, so a result that landed while the operator was on
+    another page is still there to read.
+    This is the "what is happening right now" element - a pulsing dot, a sweeping hairline and a clock
+    that ticks between records (a phase can take a minute of silence for all the browser shows). -#}
+{% set tasks = tasks_state() %}
+{% if tasks %}
+<div class="card relative mb-4 overflow-hidden{{ ' border-emerald-500/30' if live_tasks() }}">
+  {% if live_tasks() %}<span class="run-sweep pointer-events-none absolute inset-x-0 top-0 h-px" aria-hidden="true"></span>{% endif %}
+  {% for run in tasks %}
+  {% set label = {'batch': 'batch run · every queued job', 'social': 'daily project · github · linkedin', 'job': 'single job run', 'scrape': 'scrape · all four boards', 'replies': 'check replies · inbox + sent', 'followups': 'follow-ups · one nudge per row', 'catchup': 'boot catch-up · inbox + sweeps'}.get(run.kind, run.kind) %}
+  {% set total = run.total or 0 %}
+  {% set pct = ((run.done / total) * 100) if total else 0 %}
+  {% set secs = ((run.finished - run.started) | int) if (run.state == 'done' and run.started) else 0 %}
+  <div class="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3{{ ' border-t border-zinc-800/70' if not loop.first }}">
+
+    <span class="inline-flex items-center gap-2 whitespace-nowrap font-mono text-[11px] {{ 'text-zinc-500' if run.state == 'done' else 'text-emerald-300' }}">
+      {% if run.state == 'done' %}
+      <span class="{{ 'text-emerald-400' if run.ok else 'text-red-400' }}" aria-hidden="true">{{ '✓' if run.ok else '✗' }}</span>
+      {% else %}
+      <span class="run-dot h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" aria-hidden="true"></span>
+      {% endif %}
+      {{ label }}
+      <span class="sr-only">{{ 'finished' if run.state == 'done' else 'is running' }}</span>
+    </span>
+
+    <span class="whitespace-nowrap font-mono text-[10px] text-zinc-500">
+      {% if run.job %}<span class="tnum text-zinc-300">#{{ '%04d' | format(run.job) }}</span><span class="text-zinc-700"> · </span>{% endif %}
+      {#- 'wait' is a task that has been started and is queueing for the browser: it is neither idle nor
+          running, and saying so is what makes a second click read as a queue rather than as nothing. A
+          finished task names no phase - the result is in its log line, and a stale phase would lie. -#}
+      {% if run.state != 'done' %}
+      <span class="text-zinc-300">{{ run.phase or ('waiting for the browser' if run.state == 'wait' else 'starting') }}</span>
+      <span class="text-zinc-600">{{ run.phase_state }}</span>
+      {% endif %}
+    </span>
+
+    <span class="min-w-[7rem] flex-1">
+      <span class="bar-track block h-0.5 w-full overflow-hidden rounded-full">
+        <span class="bar-fill block h-full rounded-full transition-[width] duration-500" style="width: {{ pct }}%"></span>
+      </span>
+    </span>
+
+    {#- The one step a browser run cannot answer itself: the human is in the window filling a form, and
+        the old answer was ENTER in the terminal - which does not exist under uvicorn. These two buttons
+        are that ENTER, and they are here rather than on the row because this panel is on every page.
+        Pressing one only sets the gate the run is parked on; the next record repaints this line. -#}
+    {% if run.phase_state == 'human' %}
+    <span class="inline-flex items-center gap-1.5">
+      <button data-run="/jobs/{{ run.job }}/human/done"
+              class="run-btn inline-flex items-center gap-1 rounded border border-emerald-500/50 bg-emerald-400/10 px-2 py-0.5 font-mono text-[10px] text-emerald-300 transition hover:border-emerald-500/80 hover:bg-emerald-400/20">✓ form done · continue</button>
+      <button data-run="/jobs/{{ run.job }}/human/abandon" data-confirm="Stop this run without writing a verdict? The row stays queued and the recruiter is not mailed."
+              class="run-btn inline-flex items-center gap-1 rounded border border-red-500/40 bg-red-500/[0.07] px-2 py-0.5 font-mono text-[10px] text-red-300 transition hover:border-red-500/70 hover:bg-red-500/15">✗ didn't send · stop</button>
+    </span>
+    {% endif %}
+
+    <span class="inline-flex items-baseline gap-1.5 whitespace-nowrap font-mono text-[10px] text-zinc-500">
+      {#- A daily project is one chain of steps with no queue behind it, and the sweeps have no queue
+          either: they count nothing, and a "0/8" that never moves is worse than silence. -#}
+      {% if total and run.kind != 'social' %}
+      <span class="tnum text-zinc-300">{{ run.done }}</span><span class="text-zinc-600">/{{ total }}</span> jobs
+      <span class="text-zinc-700">·</span>
+      {% endif %}
+      {#- The clock is the one thing a server cannot render: base.html ticks every [data-started]. A
+          finished task has no data-started and carries the total it took instead. -#}
+      <span class="run-elapsed tnum {{ 'text-zinc-500' if run.state == 'done' else 'text-emerald-300/90' }}"
+            {% if run.state != 'done' %}data-started="{{ run.started or run.queued }}"{% endif %}>{{ '%dm %02ds' | format(secs // 60, secs % 60) if run.state == 'done' else '0s' }}</span>
+    </span>
+  </div>
+
+  <p class="truncate border-t border-zinc-800/70 px-4 py-1.5 font-mono text-[10px] {{ 'text-amber-300/90' if run.warn else 'text-zinc-500' }}"
+     title="{{ run.log }}"><span class="text-zinc-600">$</span> {{ run.log }}</p>
+  {% endfor %}
+</div>
+{% endif %}

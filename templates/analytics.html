@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}analytics · ApplyPilot{% endblock %}
+{% block crumb %}~/pipeline <span class="text-zinc-700">/</span> <span class="text-zinc-300">analytics</span>{% endblock %}
+
+{% block topbar %}
+  <a href="/analytics" class="rounded-md border border-zinc-800 px-2.5 py-1 font-mono text-[10px] text-zinc-400 transition hover:border-zinc-700 hover:text-zinc-200">reload</a>
+{% endblock %}
+
+{% block content %}
+{% set f = rates.funnel %}
+{% set peak = [f.queued, f.applied, f.emailed, f.replied, f.followed] | max %}
+
+<section class="mb-4 grid gap-3 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
+
+  <div class="card p-5">
+    <div class="mb-4 flex items-baseline gap-3">
+      <p class="label">funnel</p>
+      <span class="rule h-px flex-1"></span>
+      <span class="font-mono text-[10px] text-zinc-600">every row in jobs.db, all time</span>
+    </div>
+    <div class="flex h-36 items-end gap-2.5">
+      {% for name, value in [('queued', f.queued), ('applied', f.applied), ('emailed', f.emailed),
+                             ('replied', f.replied), ('followed', f.followed)] %}
+      {% set h = (value / peak * 100) if peak else 0 %}
+      <div class="group flex h-full min-w-0 flex-1 flex-col justify-end gap-2" title="{{ name }}: {{ value }}">
+        <span class="tnum text-center font-mono text-[12px] {{ 'text-emerald-400' if value and name in ('emailed', 'replied', 'followed') else 'text-zinc-400' }}">{{ value }}</span>
+        {% if value %}
+        <div class="col-fill w-full rounded-t" style="height: {{ h if h > 5 else 5 }}%"></div>
+        {% else %}
+        <div class="h-0.5 w-full rounded-full bg-zinc-800"></div>
+        {% endif %}
+        <span class="truncate text-center font-mono text-[9px] uppercase tracking-[0.14em] text-zinc-600">{{ name }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="grid grid-cols-2 gap-3">
+    {#- reply rate is replied/emailed, so it is only defined once something was emailed: a fresh or just
+        wiped database has emailed = 0 and an unguarded division raised ZeroDivisionError on render. -#}
+    {% set tiles = [
+      ('emailed', f.emailed, 'a human reached'),
+      ('replied', f.replied, 'came back'),
+      ('followed', f.followed, 'nudged once'),
+      ('reply rate', ((f.replied / f.emailed * 100) | round(0) | int if f.emailed else 0) ~ '%', 'replied / emailed'),
+    ] %}
+    {% for label, value, hint in tiles %}
+    <div class="card flex flex-col justify-between p-4">
+      <p class="label">{{ label }}</p>
+      <p class="tnum mt-2 font-mono text-[26px] leading-none {{ 'text-emerald-400' if loop.index == 2 and f.replied else 'text-zinc-100' }}">{{ value }}</p>
+      <p class="mt-2 font-mono text-[10px] text-zinc-600">{{ hint }}</p>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+{#- reply rate per grouping, as inline bar rows. No chart library: the bar is a zinc track with an
+    emerald fill whose width is the reply rate. Sorted by volume (sent) already, server-side. -#}
+{% macro bars(title, hint, rows) %}
+<section class="card overflow-hidden">
+  <div class="flex items-center gap-3 border-b border-zinc-800/80 px-4 py-3">
+    <span class="label">{{ title }}</span>
+    <span class="rule h-px flex-1"></span>
+    <span class="font-mono text-[10px] text-zinc-600">{{ hint }}</span>
+  </div>
+  {% if rows %}
+  <div class="divide-y divide-zinc-800/50">
+    {% for r in rows %}
+    {% set pct = (r.rate * 100) | round(1) %}
+    {#- a row scraped before track/template existed tallies under '-'; say that in words -#}
+    {% set label = 'unset' if r.key in ('-', '', none) else r.key %}
+    <div class="flex items-center gap-4 px-4 py-2.5 transition hover:bg-white/[0.02]">
+      <span class="w-36 shrink-0 truncate font-mono text-[11px] {{ 'text-zinc-600' if label == 'unset' else 'text-zinc-300' }}" title="{{ r.key }}">{{ label }}</span>
+      <div class="bar-track relative h-1.5 flex-1 overflow-hidden rounded-full">
+        <div class="bar-fill h-full rounded-full" style="width: {{ pct if pct > 0 else 0 }}%"></div>
+      </div>
+      <span class="tnum w-14 shrink-0 text-right font-mono text-[11px] {{ 'text-emerald-400' if r.rate >= 0.3 else 'text-zinc-400' }}">{{ pct }}%</span>
+      <span class="tnum w-24 shrink-0 text-right font-mono text-[10px] text-zinc-600">{{ r.replied }}/{{ r.sent }} sent</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="px-4 py-10 text-center font-mono text-[11px] text-zinc-600">no outreach yet · nothing to chart</p>
+  {% endif %}
+</section>
+{% endmacro %}
+
+<div class="grid gap-3">
+  {{ bars('reply rate · platform', 'replied / emailed', rates.platform) }}
+  {{ bars('reply rate · track', 'which domain answers', rates.track) }}
+  {{ bars('reply rate · template', 'cdac vs personal resume', rates.template) }}
+</div>
+{% endblock %}

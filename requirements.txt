@@ -1,0 +1,19 @@
+fastapi>=0.115
+uvicorn[standard]>=0.32
+jinja2>=3.1
+aiosqlite>=0.20
+python-jobspy>=1.1.77
+playwright>=1.48
+weasyprint>=62
+pypdf>=5.0
+pandas>=2.2
+pyhunter>=1.7
+python-dotenv>=1.0
+# HTMX + Tailwind load from CDN in templates. No pip package, no Node build step.
+# ai_engine shells out to the global `claude` CLI (npm i -g @anthropic-ai/claude-code) instead of
+# the anthropic SDK: the router 401s the SDK's HTTP client and accepts the CLI.
+# weasyprint on Windows needs GTK runtime: https://weasyprint.org/ (install once, system-wide).
+# after install: playwright install chromium
+# python-jobspy pins NUMPY==1.26.3 and regex<2025, neither of which has a 3.14 wheel (source build
+# needs MSVC). Install it with `pip install --no-deps python-jobspy` on 3.14: scrape_jobs is verified
+# working against numpy 2.5.x / regex 2026 for both sites, so `pip check` stays noisy by design.

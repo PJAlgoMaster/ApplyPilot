@@ -1,0 +1,268 @@
+{% set pay = job.salary | lpa %}
+{% set bond = job.bond_terms | bond_years %}
+{% set pill = {
+  'new':     'border-zinc-700 bg-zinc-800/60 text-zinc-400',
+  'queued':  'border-zinc-700 bg-white/[0.04] text-zinc-300',
+  'applied': 'border-emerald-500/50 bg-emerald-400/10 text-emerald-300',
+  'emailed': 'border-emerald-500/50 bg-emerald-400/10 text-emerald-300',
+  'skipped': 'border-zinc-800 bg-zinc-900 text-zinc-600',
+  'failed':  'border-red-500/40 bg-red-500/10 text-red-300',
+} %}
+{% set rail = {'queued': 'bg-zinc-600', 'applied': 'bg-emerald-500', 'emailed': 'bg-emerald-500',
+               'failed': 'bg-red-500/80', 'skipped': 'bg-zinc-800', 'new': 'bg-zinc-700'} %}
+{#- `phases` turns this card into the Active Task view: the action button is replaced by the phase
+    checklist while the pipeline runs. `oob` marks the card for htmx's out-of-band swap, which is how a
+    streamed record reaches a job that is not the request's target.
+    When the caller passes no checklist the task registry is asked instead (job_phases), so a page that
+    loads mid-run, or a fragment swapped in by another button, paints the same phases as the stream that
+    started it. Several jobs can be running at once now, so the lookup is per job id, not one global. -#}
+{% set phases = phases if phases is defined and phases else job_phases(job.id) %}
+<article id="job-{{ job.id }}"{% if oob %} hx-swap-oob="true"{% endif %}
+  class="card card-hover group relative overflow-hidden {{ 'border-emerald-500/40' if phases else '' }}">
+  <span class="rail absolute inset-y-0 left-0 w-[2px] {{ rail.get(job.status, 'bg-zinc-700') }}"></span>
+
+  <div class="flex flex-col gap-3 py-3 pl-4 pr-3.5 lg:flex-row lg:items-center lg:gap-4">
+
+    {#- checkbox selection: what the "delete checked" button reads. Named job, valued with the row id. -#}
+    <input type="checkbox" name="job" value="{{ job.id }}" aria-label="select job {{ '%04d' | format(job.id) }}"
+      class="h-3.5 w-3.5 shrink-0 cursor-pointer rounded border-zinc-700 bg-transparent accent-emerald-500">
+
+    <div class="min-w-0 flex-1">
+      <div class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+        <span class="job-pos tnum inline-block min-w-[1.1rem] text-right font-mono text-[10px] text-zinc-600"
+              title="job #{{ '%04d' | format(job.id) }}"></span>
+        <h3 class="max-w-[16rem] truncate text-[13px] font-medium text-zinc-100" title="{{ job.company }}">{{ job.company }}</h3>
+        <span class="text-zinc-700">·</span>
+        <a href="{{ job.job_url }}" target="_blank" rel="noopener noreferrer"
+           class="max-w-[26rem] truncate text-[12px] text-zinc-400 transition hover:text-emerald-300" title="{{ job.title }}">{{ job.title }}</a>
+        <span class="rounded border border-zinc-800 px-1.5 py-px font-mono text-[9px] uppercase tracking-wider text-zinc-500">{{ job.platform }}</span>
+        {#- WHICH family this req belongs to (database.jobs.role) - the queue is a mix of four, and the
+            count per family is on the tab strip above. Brighter than the platform chip so the role
+            reads first; the palette stays zinc on purpose, see the accent rule in audit_check. -#}
+        {% if job.role %}<span class="rounded border border-zinc-700 px-1.5 py-px font-mono text-[9px] uppercase tracking-wider text-zinc-300"
+              title="role family · {{ job.role }}">{{ job.role }}</span>{% endif %}
+      </div>
+
+      <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 font-mono text-[10px]">
+        {% if job.fit_score is not none %}
+        <span class="inline-flex items-center gap-2" title="fit score {{ '%.2f' | format(job.fit_score) }}{% if job.track %} · track: {{ job.track }}{% endif %}">
+          <span class="text-zinc-600">fit</span>
+          <span class="bar-track h-1 w-14 overflow-hidden rounded-full">
+            <span class="bar-fill block h-full rounded-full" style="width: {{ (job.fit_score * 100) | round(0) }}%"></span>
+          </span>
+          <span class="tnum {{ 'text-emerald-400' if job.fit_score >= 0.6 else ('text-amber-300' if job.fit_score >= 0.3 else 'text-zinc-500') }}">{{ '%.2f' | format(job.fit_score) }}</span>
+          {% if job.track %}<span class="rounded border border-zinc-800 px-1.5 py-px uppercase tracking-wider text-zinc-500">{{ job.track }}</span>{% endif %}
+        </span>
+        {% else %}
+        <span class="text-zinc-700">fit —</span>
+        {% endif %}
+
+        <span class="{{ 'text-emerald-400' if pay is not none and pay >= cfg.MIN_LPA else ('text-red-400/80' if pay is not none else 'text-zinc-600') }}">
+          {{ '%g LPA' | format(pay) if pay is not none else 'salary —' }}
+        </span>
+        <span class="{{ 'text-zinc-500' if bond <= cfg.MAX_BOND_YEARS else 'text-red-400/80' }}">
+          bond {{ '%g y' | format(bond) if bond else 'none' }}
+        </span>
+        <span class="{{ 'text-zinc-400' if job.hr_email else 'text-zinc-700' }}" title="{{ job.hr_email or 'no HR mailbox on file' }}">
+          {{ job.hr_email or 'hr —' }}
+        </span>
+        {% if job.template %}<span class="text-zinc-600">resume <span class="text-zinc-400">{{ job.template }}</span></span>{% endif %}
+        {% if job.date_posted %}<span class="text-zinc-600">posted {{ job.date_posted }}</span>{% endif %}
+        {% if job.outreach_at %}<span class="text-zinc-600" title="outreach {{ job.outreach_at }}">mailed <span class="text-zinc-400">{{ job.outreach_at[:10] }}</span></span>{% endif %}
+      </div>
+
+      {#- `msg` is the live stream's verdict; `job.notes` is the same verdict persisted by the last run, so a
+          card read back from the DB still says WHY it failed instead of only that it did. -#}
+      {% set verdict = msg or job.notes %}
+      {% if verdict %}
+      <p class="mt-2 max-w-[46rem] truncate font-mono text-[10px] leading-relaxed {{ 'text-red-400/70' if (not ok if ok is defined else job.status == 'failed') else 'text-zinc-500' }}" title="{{ verdict }}">{{ verdict }}</p>
+      {% endif %}
+
+      {% if job.outreach_at and not job.applied_at %}
+      {#- The one state where a silent lie is expensive: a recruiter has been told an application is on
+          its way and no form was ever sent. The status label cannot show it - this row reads 'emailed',
+          true about the mail and false about the job - so the alert is built from the two columns and
+          from nothing else. Only this pair: if no mail went out there is nobody waiting to be let down,
+          and an alert on every un-applied row is an alert the operator learns to scroll past. -#}
+      <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded border border-red-500/40 bg-red-500/[0.07] px-2 py-1.5">
+        <span class="font-mono text-[10px] text-red-300">
+          <span class="font-semibold text-red-400">⚠ you have not applied</span>
+          <span class="text-red-300/70">· mailed {{ job.outreach_at[:10] }}, no application on file</span>
+        </span>
+        {#- Both remedies live on the alert rather than in the button column: they are the answer to
+            this alert and to nothing else. 'apply on portal' is a plain link - a new tab changes nothing
+            here. Nothing on this card is disabled while a run is in flight: a click starts work or
+            attaches to the work already doing it, and refusing the click was only ever a client-side
+            illusion - a second tab bypassed it anyway. -#}
+        <span class="flex flex-wrap items-center gap-1.5">
+          <a href="{{ job.job_url }}" target="_blank" rel="noopener noreferrer"
+             class="inline-flex items-center gap-1.5 rounded-md border border-red-500/40 bg-red-500/[0.06] px-2 py-1 font-mono text-[10px] text-red-200 transition hover:border-red-500/70 hover:bg-red-500/[0.14]">
+            <span class="text-red-400">↗</span>apply on portal
+          </a>
+          {#- The alert needs a way to stop being true, or run-all keeps re-attempting the employer's form
+              and the warning becomes noise. This stamps applied_at through the same write-once fact the
+              pipeline stamps, so a later run reads 'already submitted' and refuses to apply twice. The
+              status label is deliberately left alone - this route knows one fact, not the whole verdict. -#}
+          <button hx-post="/jobs/{{ job.id }}/applied" hx-target="#rows" hx-swap="innerHTML"
+            hx-indicator="this"
+            hx-confirm="Mark #{{ '%04d' | format(job.id) }} — {{ job.company }} as applied by hand? Only after you have actually submitted their form. The stamp cannot be undone from here, and the pipeline will refuse to apply to this employer again."
+            class="run-btn inline-flex items-center gap-1.5 rounded-md border border-zinc-700 px-2 py-1 font-mono text-[10px] text-zinc-400 transition hover:border-emerald-500/50 hover:bg-emerald-400/[0.07] hover:text-emerald-300 disabled:cursor-not-allowed disabled:opacity-40">
+            <span class="idle-label">✓ i applied it</span>
+            <span class="htmx-indicator">stamping…</span>
+          </button>
+        </span>
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="flex shrink-0 flex-wrap items-center gap-2 lg:flex-col lg:items-end lg:gap-2">
+      {% if phases %}
+        {#- waiting/running · done · failed · skipped, or 'needs you': the run is parked on a manual apply
+            and the panel's ✓ / ✗ buttons are what move it on. -#}
+        {% set badge = {
+          'wait': ('border-zinc-800 bg-zinc-900/50 text-zinc-600', 'waiting'),
+          'run':  ('animate-pulse border-emerald-500/60 bg-emerald-400/10 text-emerald-300', 'running'),
+          'ok':   ('border-emerald-500/50 bg-emerald-400/10 text-emerald-300', 'done'),
+          'fail': ('border-red-500/50 bg-red-500/10 text-red-300', 'failed'),
+          'skip': ('border-amber-500/40 bg-amber-400/10 text-amber-300', 'skipped'),
+          'human': ('border-amber-500/60 bg-amber-400/10 text-amber-300', 'needs you'),
+        } %}
+        {% set label = {'ai': 'tailor resume', 'render': 'render pdf', 'apply': 'submit', 'outreach': 'reach human'} %}
+        <div class="flex flex-wrap items-center justify-end gap-1.5">
+          {% for phase, state in phases.items() %}
+          {% set cls, word = badge.get(state, badge['wait']) %}
+          <span class="inline-flex items-center gap-1.5 rounded border px-2 py-0.5 font-mono text-[10px] {{ cls }}">
+            <span class="h-1 w-1 rounded-full bg-current opacity-70"></span>{{ label.get(phase, phase) }}
+            <span class="text-zinc-600">{{ word }}</span>
+          </span>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="flex flex-wrap items-center justify-end gap-1.5">
+          <span class="inline-flex items-center gap-1.5 rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider {{ pill.get(job.status, pill['new']) }}">
+            {% if job.status in ('queued', 'applied', 'emailed') %}<span class="h-1 w-1 rounded-full bg-emerald-400 {{ 'animate-pulse' if job.status == 'queued' }}"></span>{% endif %}
+            {{ job.status }}
+          </span>
+          {% if job.replied_at %}
+          <span class="inline-flex items-center gap-1.5 rounded border border-sky-500/50 bg-sky-400/10 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-sky-300" title="replied {{ job.replied_at }}">replied</span>
+          {% endif %}
+          {% if job.followup_at %}
+          <span class="inline-flex items-center gap-1.5 rounded border border-amber-500/40 bg-amber-400/10 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-amber-300" title="followed up {{ job.followup_at }}">nudged</span>
+          {% endif %}
+        </div>
+
+        {#- One chip per phase, and the DONE state of each reads the FACT, never the verdict: applied_at is
+            the submit, outreach_at is the send, template/pdf_path is the resume that was built. Red comes
+            from phase_fail - what the LAST RUN tried and did not land - because the verdict label cannot
+            carry it: job 27 submitted to Toyota, reached nobody, and reads 'applied', which is the
+            strongest true thing about it. Keyed on status == 'failed' instead, that row's broken outreach
+            showed as a dim 'not yet' chip beside a green apply, with nothing saying which half broke. -#}
+        {% set broken = (job.phase_fail or '').split(',') %}
+        {% set stain = {'ok': 'border-emerald-500/50 bg-emerald-400/10 text-emerald-300',
+                        'fail': 'border-red-500/50 bg-red-500/10 text-red-300',
+                        'todo': 'border-zinc-800 bg-white/[0.02] text-zinc-600'} %}
+        {% set hint = {
+          'resume':   {'ok': 'resume built: ' ~ job.template, 'fail': 'the last run could not build the resume',
+                       'todo': 'no resume built yet'},
+          'apply':    {'ok': 'submitted ' ~ (job.applied_at or '')[:10], 'fail': 'the last run did not get the form in',
+                       'todo': 'not submitted yet'},
+          'outreach': {'ok': 'mailed ' ~ (job.outreach_at or '')[:10],
+                       'fail': 'the last run reached nobody — mail and DM both', 'todo': 'nobody contacted yet'}} %}
+        {% set steps = [
+             ('resume', 'ok' if (job.template or job.pdf_path) else ('fail' if 'resume' in broken else 'todo')),
+             ('apply', 'ok' if job.applied_at else ('fail' if 'apply' in broken else 'todo')),
+             ('outreach', 'ok' if job.outreach_at else ('fail' if 'outreach' in broken else 'todo'))] %}
+        <div class="flex flex-wrap items-center justify-end gap-1">
+          {% for name, state in steps %}
+          <span title="{{ hint[name][state] }}"
+            class="inline-flex items-center gap-1 rounded border px-1.5 py-1 font-mono text-[10px] {{ stain[state] }}">
+            <span>{{ '✓' if state == 'ok' else ('✗' if state == 'fail' else '·') }}</span>{{ name }}
+          </span>
+          {% endfor %}
+        </div>
+
+        {% if job.status == 'skipped' %}
+        {#- run-pipeline on a rejected row is a no-op: the route re-runs the same eligibility gate, gets
+            the same answer and writes 'skipped' again. What the row needs is to be let back in - the gate
+            is a heuristic, and a heuristic is wrong about some rows. Nothing has been sent for a skipped
+            row by construction, so this cannot buy the employer a second contact. -#}
+        <button hx-post="/jobs/{{ job.id }}/revive" hx-target="#rows" hx-swap="innerHTML"
+          hx-indicator="this"
+          hx-confirm="Put #{{ '%04d' | format(job.id) }} — {{ job.company }} · {{ job.title }} back in the queue? It was skipped for: {{ job.notes or 'no reason recorded' }}. Nothing was ever sent to this employer, so the next run is a first contact, not a repeat."
+          class="run-btn inline-flex items-center gap-2 whitespace-nowrap rounded-md border border-zinc-700 px-2.5 py-1.5 font-mono text-[10px] text-zinc-300 transition hover:border-emerald-500/50 hover:bg-emerald-400/[0.07] hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-40">
+          <span class="idle-label items-center gap-2">
+            <span class="text-emerald-400">$</span>revive
+          </span>
+          <span class="htmx-indicator items-center gap-2">requeueing…</span>
+        </button>
+        {% elif not job.applied_at or not job.outreach_at %}
+        {#- Offered while either half is still owed: an un-applied row with its mail already out (the
+            alert above is asking for exactly this button), an applied row with no mail yet, and every
+            row that has never run. A fully done row gets no control here, and a skipped one gets revive
+            instead - this button is for work the pipeline can still finish. -#}
+        {%- set broke = job.phase_fail %}
+        {%- set relaunch, relaunch_what = 'run-pipeline', 'submits a real application and sends a cold email' %}
+        {%- if job.outreach_at and not job.applied_at %}
+        {%- set relaunch = 'finish-apply' %}
+        {%- set relaunch_what = 're-opens the employer\'s form and waits for you to press ENTER again; the mail already went out on ' ~ job.outreach_at[:10] ~ ' and is NOT sent a second time' %}
+        {%- elif job.applied_at and not job.outreach_at %}
+        {%- set relaunch = 'finish-outreach' %}
+        {%- set relaunch_what = 'does not apply again - applied_at is already stamped - and only reaches the recruiter' %}
+        {%- elif broke %}
+        {%- set relaunch = 'retry-pipeline' %}
+        {%- endif %}
+        {#- A form even when it holds nothing but the button: the reader in base.html sends the form's
+            fields with the streamed POST, and that is how a typed address reaches the route that saves it.
+            onsubmit is blocked because a single input in a form submits on Enter, which would otherwise
+            navigate the page away mid-run. -#}
+        <form class="flex flex-wrap items-center justify-end gap-1.5" onsubmit="return false">
+          {% if 'outreach' in broken %}
+          {#- The machine came back empty-handed and that is why this row is red, so this is where the
+              human hands it what it could not find. Prefilled with whatever address is on the row, so a
+              bounce or a bad guess can be corrected, not just filled in. type=email IS the validation:
+              the browser's own, checked by the reader in base.html before it sends anything, so no
+              pattern is duplicated here and the route can trust the shape. -#}
+          <input name="email" type="email" autocomplete="off" spellcheck="false"
+            value="{{ job.hr_email or '' }}" placeholder="hr@employer.com"
+            title="the recruiter's address, if you have it - the run mails it and caches it for this employer"
+            class="w-[11.5rem] rounded-md border border-red-500/40 bg-red-500/[0.06] px-2 py-1.5 font-mono text-[10px] text-red-100 placeholder:text-red-300/40 focus:border-red-500/70 focus:outline-none">
+          {% endif %}
+          {#- data-run streams: base.html reads the chunked body and applies each OOB record as it lands.
+              htmx's own hx-post would buffer the whole response and swap once, at the end. The button is
+              red when the last run broke, because pressing it again is the retry the red is asking for. -#}
+          <button
+            data-run="/jobs/{{ job.id }}/pipeline"
+            data-confirm="Run the pipeline for {{ job.company }} — {{ job.title }}? It {{ relaunch_what }}."
+            class="run-btn inline-flex items-center gap-2 whitespace-nowrap rounded-md border px-2.5 py-1.5 font-mono text-[10px] transition disabled:cursor-not-allowed disabled:opacity-40 {{ 'border-red-500/50 bg-red-500/[0.07] text-red-200 hover:border-red-500/70 hover:bg-red-500/[0.14]' if broke else 'border-emerald-500/40 bg-emerald-400/[0.07] text-emerald-200 hover:border-emerald-500/70 hover:bg-emerald-400/[0.14]' }}">
+            <span class="idle-label items-center gap-2">
+              <span class="{{ 'text-red-400' if broke else 'text-emerald-400' }}">$</span>{{ relaunch }}
+            </span>
+            <span class="htmx-indicator items-center gap-2">
+              <svg class="h-3 w-3 animate-spin {{ 'text-red-400' if broke else 'text-emerald-400' }}" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" stroke-opacity=".2"/>
+                <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+              </svg>
+              <span class="{{ 'text-red-300/80' if broke else 'text-emerald-300/80' }}">resume · submit · dm · email…</span>
+            </span>
+          </button>
+        </form>
+        {% endif %}
+
+        {#- one row, deleted by hand. The button is live even mid-run, like everything else here; what
+            stops a second RUN of the row the bot is applying to is the server-side key, not a disabled
+            button - clicking a running row's button attaches to that run. -#}
+        <button hx-delete="/jobs/{{ job.id }}" hx-target="#rows" hx-swap="innerHTML"
+          hx-indicator="this"
+          hx-confirm="Delete #{{ '%04d' | format(job.id) }} — {{ job.company }} · {{ job.title }}?{% if job.applied_at or job.outreach_at %} This row already left this machine ({{ 'applied' if job.applied_at else 'mailed' }}), so deleting it only erases the record — the application or the email itself cannot be undone. The employer stays cooled down either way.{% endif %}"
+          title="delete this row"
+          class="run-btn inline-flex shrink-0 items-center gap-1.5 rounded-md border border-zinc-800 px-2 py-1.5 font-mono text-[10px] text-zinc-600 transition hover:border-red-500/50 hover:bg-red-500/[0.07] hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-40">
+          <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true">
+            <path d="M4 7h16M10 11v6M14 11v6M5 7l1 12a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1l1-12M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+          </svg>
+          <span class="idle-label">delete</span>
+          <span class="htmx-indicator">deleting…</span>
+        </button>
+      {% endif %}
+    </div>
+  </div>
+</article>

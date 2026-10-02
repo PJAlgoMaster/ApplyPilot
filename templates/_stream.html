@@ -1,0 +1,10 @@
+{# One streamed record: the job's card, the status line and the live run banner, all hx-swap-oob so htmx
+   applies them wherever they already live on the page. Nothing here is a swap target - the whole record
+   is OOB, so the reader in base.html can hand it to htmx.swap with swapStyle 'none'.
+   The card rides inside <template> on purpose: htmx looks inside template elements for OOB content, and
+   a template keeps the raw record parseable whichever element type the card happens to be. #}
+{% if job %}<template>{% include "_row.html" %}</template>{% endif %}
+<div id="run-banner" hx-swap-oob="true">{% include "_run.html" %}</div>
+<span id="stream-log" hx-swap-oob="true"
+  class="truncate font-mono text-[10px] {{ 'text-red-400/80' if ok is not none and not ok else 'text-emerald-400/80' }}"
+  title="{{ log }}"><span class="text-zinc-600">$</span> {{ log }}</span>

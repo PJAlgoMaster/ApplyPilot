@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ r.name }}{% if role %} - {{ role }}{% endif %}</title>
+<meta name="author" content="{{ r.name }}">
+<style>
+  /* Jake's-resume standard, impact variant: skills and experience lead, education closes.
+     Every effect is CSS-only — no tables, no columns, no floats — so the PDF text layer
+     stays a single linear stream for ATS parsers. */
+  @page { size: A4; margin: 0.5in; }
+  * { box-sizing: border-box; }
+  body { font-family: "Times New Roman", Times, Georgia, serif; font-size: 10.5pt;
+         line-height: 1.15; color: #000; margin: 0; }
+
+  header { text-align: center; margin-bottom: 5pt; }
+  h1 { font-size: 24pt; font-weight: normal; letter-spacing: 0.3pt; margin: 0 0 3pt; }
+  .contact { font-size: 10pt; margin: 0 0 1pt; }
+  .avail { font-size: 10pt; font-weight: bold; margin: 0; }
+
+  h2 { font-size: 12pt; font-weight: bold; text-transform: uppercase; letter-spacing: 0.4pt;
+       margin: 10pt 0 3pt; padding-bottom: 1.5pt; border-bottom: 1px solid #000; }
+
+  /* Flex row: title|organization left, dates flush to the right margin, shared baseline. */
+  .row { display: flex; justify-content: space-between; align-items: baseline; margin-top: 4pt; }
+  .row .left { flex: 1 1 auto; }
+  .row .right { flex: 0 0 auto; padding-left: 10pt; text-align: right; }
+  h3 { display: inline; font-size: 10.5pt; font-weight: bold; margin: 0; }
+  .org, .period { font-style: italic; }
+
+  p { margin: 0 0 3pt; }
+  ul { margin: 2pt 0 0; padding-left: 13pt; list-style-type: disc; }
+  li { margin-bottom: 2px; }
+  .cat { margin: 0 0 2pt; }
+  a { color: #000; text-decoration: none; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>{{ r.name }}</h1>
+  {% set bits = [contact.email, contact.phone, contact.location, contact.linkedin, contact.github] | select | list %}
+  {% if bits %}<p class="contact">{{ bits | join(' | ') }}</p>{% endif %}
+  <p class="avail">Immediate Joiner - 0 Days Notice</p>
+</header>
+
+{% if r.summary %}
+<h2>Summary</h2>
+{% for line in r.summary %}<p>{{ line }}</p>{% endfor %}
+{% endif %}
+
+{% if r.skills %}
+<h2>Technical Skills</h2>
+{% for group in r.skills %}
+<p class="cat"><b>{{ group.category }}:</b> {{ group['items'] | join(', ') }}</p>
+{% endfor %}
+{% endif %}
+
+{% if r.experience %}
+<h2>Experience</h2>
+{% for job in r.experience %}
+<div class="row">
+  <div class="left"><h3>{{ job.role }}</h3>{% if job.organization %}<span class="org"> | {{ job.organization }}</span>{% endif %}</div>
+  {% if job.period %}<div class="right period">{{ job.period }}</div>{% endif %}
+</div>
+<ul>{% for b in job.bullets %}<li>{{ b }}</li>{% endfor %}</ul>
+{% endfor %}
+{% endif %}
+
+{% if r.reports %}
+<h2>Self-Directed Technical Reports</h2>
+{% for rep in r.reports %}
+<div class="row">
+  <div class="left"><h3>{{ rep.title }}</h3></div>
+  {% if rep.link %}<div class="right org">{{ rep.link }}</div>{% endif %}
+</div>
+<ul>{% for b in rep.bullets %}<li>{{ b }}</li>{% endfor %}</ul>
+{% endfor %}
+{% endif %}
+
+{% if r.education %}
+<h2>Education</h2>
+{% for ed in r.education %}
+<div class="row">
+  <div class="left"><h3>{{ ed.credential }}</h3>{% if ed.institution %}<span class="org"> | {{ ed.institution }}</span>{% endif %}</div>
+  {% if ed.period %}<div class="right period">{{ ed.period }}</div>{% endif %}
+</div>
+{% if ed.highlights %}<p>Coursework: {{ ed.highlights | join(', ') }}</p>{% endif %}
+{% endfor %}
+{% endif %}
+
+</body>
+</html>

@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en" class="h-full">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}ApplyPilot{% endblock %}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>tailwind.config={theme:{extend:{fontFamily:{sans:['Inter','system-ui','sans-serif'],mono:['"JetBrains Mono"','"Fira Code"','ui-monospace','monospace']}}}}</script>
+<script src="https://unpkg.com/htmx.org@2.0.4" integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+" crossorigin="anonymous"></script>
+<style>
+  :root { color-scheme:dark; --line:#27272a; --edge:#3f3f46 }
+  body { background:#09090b }
+  /* Ambient light + hairline grid: two raw radial gradients and a 64px rule, behind everything and
+     under a radial mask so it fades out before it can compete with the data. No Tailwind gradient
+     class, no image asset, no build step. */
+  body::before {
+    content:''; position:fixed; inset:0; z-index:-1; pointer-events:none;
+    background:
+      radial-gradient(820px 460px at 8% -12%, rgba(16,185,129,.075), transparent 62%),
+      radial-gradient(720px 420px at 102% -6%, rgba(56,189,248,.05), transparent 58%),
+      radial-gradient(1000px 700px at 50% 118%, rgba(255,255,255,.022), transparent 60%);
+  }
+  body::after {
+    content:''; position:fixed; inset:0; z-index:-1; pointer-events:none;
+    background-image:linear-gradient(rgba(255,255,255,.026) 1px, transparent 1px),
+                     linear-gradient(90deg, rgba(255,255,255,.026) 1px, transparent 1px);
+    background-size:64px 64px;
+    -webkit-mask-image:radial-gradient(900px 620px at 28% 0%, #000, transparent 78%);
+            mask-image:radial-gradient(900px 620px at 28% 0%, #000, transparent 78%);
+  }
+  ::selection { background:rgba(16,185,129,.25) }
+  ::-webkit-scrollbar { width:10px; height:10px }
+  ::-webkit-scrollbar-track { background:#09090b }
+  ::-webkit-scrollbar-thumb { background:#27272a; border:3px solid #09090b; border-radius:8px }
+  ::-webkit-scrollbar-thumb:hover { background:#3f3f46 }
+  /* One card surface, defined once: hairline border + a top-lit film. */
+  .card { border:1px solid var(--line); border-radius:.5rem; background-color:rgba(255,255,255,.02);
+          background-image:linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.008)) }
+  .card-hover { transition:border-color .15s, background-color .15s }
+  .card-hover:hover { border-color:var(--edge); background-color:rgba(255,255,255,.035) }
+  .label { font-family:"JetBrains Mono",ui-monospace,monospace; font-size:9px; line-height:1.2;
+           letter-spacing:.2em; text-transform:uppercase; color:#52525b }
+  .tnum { font-variant-numeric:tabular-nums }
+  /* Row numbering is the browser's job, not the server's. What a row shows is its position in the
+     list as it stands on screen - so a row replaced out-of-band mid-run renumbers nothing, and the
+     database id (which is not a position: SQLite reuses it once the top row is deleted, which is how
+     a fresh scrape came out numbered 31 down to 4) stops pretending to be one. The id is still on
+     the row, in the tooltip and behind every confirm that names it. */
+  #rows { counter-reset:job }
+  #rows article { counter-increment:job }
+  .job-pos::before { content:counter(job) }
+  .bar-track { background:rgba(255,255,255,.05) }
+  .bar-fill { background-image:linear-gradient(90deg, rgba(16,185,129,.85), rgba(16,185,129,.42)) }
+  .col-fill { background-image:linear-gradient(180deg, rgba(16,185,129,.6), rgba(16,185,129,.14)) }
+  .rule { background-image:linear-gradient(90deg,rgba(255,255,255,.06) 1px,transparent 1px); background-size:4px 1px }
+  .htmx-indicator { display:none }
+  .htmx-request .htmx-indicator { display:inline-flex }
+  .htmx-request .idle-label { display:none }
+  /* Live-run motion, so "is it working or is it stuck" is answerable at a glance and between records.
+     Two animations, no asset, no library: a breathing dot and a hairline that sweeps the top edge of
+     the run banner. Both are switched off for anyone who asked the OS for reduced motion. */
+  .run-dot { animation:run-pulse 1.1s ease-in-out infinite }
+  @keyframes run-pulse {
+    0%, 100% { opacity:.35; transform:scale(.85) }
+    50%      { opacity:1;   transform:scale(1.2) }
+  }
+  .run-sweep {
+    background-image:linear-gradient(90deg, transparent, rgba(16,185,129,.95), transparent);
+    background-repeat:no-repeat; background-size:38% 100%;
+    animation:run-sweep 1.5s linear infinite;
+  }
+  @keyframes run-sweep {
+    from { background-position:-40% 0 }
+    to   { background-position:140% 0 }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .run-dot, .run-sweep { animation:none }
+    .run-sweep { background-image:none; background-color:rgba(16,185,129,.55) }
+  }
+  /* .is-running is the streamed-run equivalent of htmx's own request classes: the fetch reader below
+     sets it, since a hand-rolled fetch never gets .htmx-request. There is deliberately NO
+     pointer-events/opacity lock on .run-btn: nothing is refused while work is in flight any more, so a
+     button that cannot be pressed would be a lie about what the server does with the click. */
+  .is-running .htmx-indicator { display:inline-flex }
+  .is-running .idle-label { display:none }
+  article.htmx-request { background-color:rgba(16,185,129,.045) }
+  article.htmx-request .rail { background:#10b981 }
+</style>
+</head>
+{#- data-running is set by the SERVER when any task is live, not only by the click handler: a page opened
+    while the bot is working must show the work already going. The reader below then attaches to it -
+    see /run/attach. It gates nothing else: every button stays live, and a click during a run starts a
+    second task that queues behind the browser instead of being turned away. -#}
+<body class="h-full font-sans text-[13px] text-zinc-200 antialiased"{% if live_tasks() %} data-running="1"{% endif %}>
+<div class="flex h-full">
+
+  <aside class="flex w-60 shrink-0 flex-col border-r border-zinc-800/80 bg-zinc-950/80 backdrop-blur-md">
+    <div class="flex h-14 items-center gap-2.5 border-b border-zinc-800/80 px-4">
+      <span class="grid h-7 w-7 place-items-center rounded-md border border-emerald-500/40 bg-emerald-400/10">
+        <svg class="h-3.5 w-3.5 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M13 2 4.5 13.5H11l-1 8.5 8.5-11.5H12z"/>
+        </svg>
+      </span>
+      <div class="leading-none">
+        <p class="font-mono text-[11px] font-semibold tracking-[0.16em] text-zinc-200">APPLY&#8209;PILOT</p>
+        <p class="mt-1 font-mono text-[9px] tracking-[0.14em] text-zinc-600">pipeline v3</p>
+      </div>
+    </div>
+
+    {% set icons = {
+      '/': '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+      '/analytics': '<path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/>',
+      '/health': '<path d="M2 12h4l2.5-7 3 14 2.5-7H22"/>',
+      '/docs': '<path d="M8 4H6a2 2 0 0 0-2 2v14h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2"/><rect x="8" y="2" width="8" height="4" rx="1"/>',
+    } %}
+    <nav class="flex flex-col gap-1 p-3">
+      {% set nav = [('/', 'dashboard', 'jobs pipeline'), ('/analytics', 'analytics', 'reply funnel'), ('/health', 'health', 'runtime state'), ('/docs', 'api', 'openapi')] %}
+      {% for href, label, hint in nav %}
+      {% set on = href == active_nav %}
+      <a href="{{ href }}" class="group relative flex items-center gap-2.5 rounded-md px-2.5 py-2 {{ 'bg-emerald-400/[0.07] text-emerald-300' if on else 'text-zinc-400 hover:bg-white/[0.04] hover:text-zinc-200' }}">
+        {% if on %}<span class="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-emerald-400"></span>{% endif %}
+        <svg class="h-3.5 w-3.5 shrink-0 {{ 'text-emerald-400' if on else 'text-zinc-600 group-hover:text-zinc-400' }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{{ icons[href] | safe }}</svg>
+        <span class="font-mono text-[11px]">{{ label }}</span>
+        <span class="ml-auto truncate font-mono text-[9px] {{ 'text-emerald-600' if on else 'text-zinc-700 group-hover:text-zinc-600' }}">{{ hint }}</span>
+      </a>
+      {% endfor %}
+    </nav>
+
+    <div class="mt-auto space-y-3 p-3">
+      <div class="card p-3">
+        <p class="label mb-2">guardrails</p>
+        <dl class="space-y-1.5 font-mono text-[10px]">
+          {% for k, v in [('daily cap', cfg.MAX_DAILY_APPLICATIONS ~ ' applies'), ('floor', '≥ ' ~ cfg.MIN_LPA ~ ' LPA'), ('bond', '≤ ' ~ cfg.MAX_BOND_YEARS ~ ' yr'), ('follow-up', cfg.FOLLOWUP_DAYS ~ ' d')] %}
+          <div class="flex items-baseline justify-between gap-2">
+            <dt class="text-zinc-600">{{ k }}</dt>
+            <dd class="tnum text-zinc-400">{{ v }}</dd>
+          </div>
+          {% endfor %}
+        </dl>
+      </div>
+      <p class="px-1 font-mono text-[9px] leading-relaxed text-zinc-700">
+        local sqlite · playwright<br>nothing sends without a click
+      </p>
+    </div>
+  </aside>
+
+  <div class="flex min-w-0 flex-1 flex-col">
+    <header class="flex h-14 shrink-0 items-center gap-3 border-b border-zinc-800/80 bg-zinc-950/50 px-5 backdrop-blur-md">
+      <h1 class="truncate font-mono text-[11px] text-zinc-500">{% block crumb %}~{% endblock %}</h1>
+      <div class="ml-auto flex items-center gap-2">{% block topbar %}{% endblock %}</div>
+    </header>
+    {#- The run banner is mounted on EVERY page, and always rendered (empty when idle) so the streamed
+        records have an element to replace. That is what makes a run visible from anywhere in the app. -#}
+    <main class="min-w-0 flex-1 overflow-y-auto px-5 py-5">
+      <div id="run-banner">{% include "_run.html" %}</div>
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+
+</div>
+<script>
+// [data-run] buttons stream, and so does a page that opens while a run is already in flight. htmx 2 does
+// not process a chunked body progressively - it swaps once, when the response ends - so a 2-minute
+// pipeline run would paint nothing until it was over. Here the body is read as it arrives, split on the
+// ASCII record separator main.py writes between records, and each record is handed to htmx.swap. Every
+// record is hx-swap-oob only, so swapStyle 'none' is correct: htmx applies the out-of-band elements
+// (the row, the run banner, the phase log) and inserts nothing into the target.
+const setLog = (text, bad) => {
+  const el = document.getElementById('stream-log');
+  if (!el) return;
+  el.textContent = '$ ' + text;
+  el.title = text;
+  el.className = 'truncate font-mono text-[10px] ' + (bad ? 'text-red-400/80' : 'text-emerald-400/80');
+};
+
+// One reader per page, and this flag is the only thing that decides it. It is deliberately NOT
+// document.body.dataset.running: that attribute is also rendered by the server, so on a page that loads
+// mid-run it is already '1' - using it as the guard made the auto-attach below return instantly and the
+// page sat frozen on a stale banner with no stream. The flag tracks whether THIS page has a reader
+// attached; it no longer gates clicking, because a click while work is in flight must still start work.
+let streaming = false;
+
+// Starting is a POST that must land whether or not this page is already reading a stream. When it is,
+// the click fires it and abandons the response: the task is owned by the server, so dropping the body
+// detaches this page's second reader and nothing else. Reading it would be pointless - the panel is
+// already being painted by the reader that is open.
+function fireAndForget(url, body) {
+  fetch(url, {method: 'POST', headers: {'HX-Request': 'true'}, body})
+    .then((res) => res.body && res.body.cancel())
+    .catch(() => {});
+}
+
+async function stream(url, method, body) {
+  if (streaming) return fireAndForget(url, body);
+  streaming = true;
+  document.body.dataset.running = '1';
+  setLog(method === 'POST' ? 'starting…' : 're-attaching to the work in flight…', false);
+  try {
+    const res = await fetch(url, {method: method, headers: {'HX-Request': 'true'}, body: body});
+    if (!res.ok || !res.body) throw new Error('HTTP ' + res.status + ' ' + res.statusText);
+    const reader = res.body.getReader(), decoder = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const {value, done} = await reader.read();
+      buf += decoder.decode(value, {stream: !done});
+      const records = buf.split('\x1e');
+      buf = records.pop();                     // whatever trails the last separator is a partial record
+      for (const record of records) {
+        if (record.trim()) htmx.swap(document.body, record, {swapStyle: 'none'});
+      }
+      if (done) break;
+    }
+    // The stream ends when the LAST task ends, so this is the one moment the queue on disk is known to
+    // be final. Rows are painted from the stream while it runs; this re-reads them once at the end, so a
+    // tab that was in the background - where the browser throttles the reader - still ends up correct.
+    if (document.getElementById('rows')) {
+      htmx.ajax('GET', location.pathname + location.search,
+                {target: '#rows', swap: 'innerHTML', select: '#rows'});
+    }
+  } catch (err) {
+    // The work itself is not cancelled by a dead reader (main.py drains it in a task), so this reports a
+    // broken stream, not a broken run: reload to see where the job actually ended up.
+    setLog('stream failed · ' + err + ' · reload to see final status', true);
+  } finally {
+    streaming = false;
+    delete document.body.dataset.running;
+    document.querySelectorAll('.is-running').forEach((el) => el.classList.remove('is-running'));
+  }
+}
+
+document.addEventListener('click', (event) => {
+  const btn = event.target.closest('[data-run]');
+  if (!btn) return;
+  event.preventDefault();
+  // The run button sits in a form on every row (the typed-address box lives in it), so the fields ride
+  // along with the streamed POST. reportValidity is the browser's own check on type=email: a typo is
+  // refused here, with the native bubble, instead of being saved onto the row and bounced by SMTP.
+  const form = btn.closest('form');
+  if (form && !form.reportValidity()) return;
+  if (btn.dataset.confirm && !confirm(btn.dataset.confirm)) return;
+  btn.classList.add('is-running');
+  stream(btn.dataset.run, 'POST', form ? new URLSearchParams(new FormData(form)) : null);
+});
+
+// Navigating away no longer interrupts anything (the server owns every task), so a page that opens
+// mid-run has to pick it back up: attaching replays the registry's current state and streams what comes.
+if (document.body.dataset.running) stream('/run/attach', 'GET');
+
+// The one thing the server cannot render: a clock that keeps moving between records, so a long phase
+// looks like work rather than a freeze. One per task on the panel; a finished one has no data-started
+// and keeps the total the server rendered.
+setInterval(() => {
+  document.querySelectorAll('.run-elapsed[data-started]').forEach((el) => {
+    const secs = Math.max(0, Math.floor(Date.now() / 1000 - Number(el.dataset.started || 0)));
+    el.textContent = secs < 60 ? secs + 's'
+                               : Math.floor(secs / 60) + 'm ' + String(secs % 60).padStart(2, '0') + 's';
+  });
+}, 1000);
+</script>
+</body>
+</html>
